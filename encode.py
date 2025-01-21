@@ -2,6 +2,8 @@ import os
 import fs
 from subprocess import run
 from mux import apply_video_settings, apply_audio_settings
+from scenes import generate_scenes
+from vstools import core
 
 # helper file with wrappers to encode with the usual encoders and apply the params to the output stream
 
@@ -35,3 +37,10 @@ def svt_get_binary_version():
 def svt_av1_encode(in_path: str, out_path: str, encoder_settings, worker_count, thread_affinity=2, scene_path :str = None, additional_flags=None):
     run(f"av1an -i \"{in_path}\" -o \"{out_path}\" -w {worker_count} --set-thread-affinity {thread_affinity} {additional_flags} --scenes \"{scene_path}\" -e svt-av1 -c mkvmerge -v \"{encoder_settings}\"")
     apply_video_settings(out_path, svt_get_binary_version(), encoder_settings, encoder_name)
+
+# example usage
+def luma_boost_encode(in_path: str, out_path: str, zones_path : str, scene_path: str, encoder_settings: str):
+    if not os.path.exists(scene_path):
+        src = core.bs.VideoSource(in_path)
+        generate_scenes(src, zones_path, "scenechanges.pickle", scene_path, encoder_settings)
+    svt_av1_encode(in_path, out_path, encoder_settings, 8, 2, scene_path, "--keep --resume")

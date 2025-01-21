@@ -139,11 +139,10 @@ def add_luma_boost_scene(clip: VideoNode, frames: list[KeyFrameData], override: 
     return finish_scene(frames, override, scene_start, scene_end, scene_len)
 
 # Keyframe generation with zone handling
-def generate_keyframes(clip: VideoNode, zones_path: str, default_encoder_settings: str) -> list[KeyFrameData]:
+def generate_keyframes(clip: VideoNode, zones_path: str, scenechange_path: str, default_encoder_settings: str) -> list[KeyFrameData]:
     end_frame = clip.num_frames
     zones = parse_zones(zones_path, end_frame)
     zonecount = len(zones) if zones is not None else 0
-    scenechange_path = zones_path.replace('zones', 'scenechanges')[:-4]
     scenechanges = get_scenechages(clip, scenechange_path)
 
     scene_start = 0  # start of the scene
@@ -194,8 +193,8 @@ def generate_keyframes(clip: VideoNode, zones_path: str, default_encoder_setting
     print(f"\nFound {key_no} Scenes with {num_extra_splits} extra splits.")
     return frames
 
-def generate_scenes(src, zones_path, out_path, encode_settings):
-    kfs = generate_keyframes(src, zones_path, encode_settings)
+def generate_scenes(src: VideoNode, zones_path: str, scenechange_path: str, out_path: str, encode_settings: str):
+    kfs: list[KeyFrameData] = generate_keyframes(src, zones_path, scenechange_path, encode_settings)
     # Convert each KeyFrameData to a dictionary and dump to JSON
     kf_dicts = { "scenes": [kf.to_dict() for kf in kfs], "frames": src.num_frames }
     json_out = json.dumps(kf_dicts)
