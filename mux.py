@@ -1,66 +1,50 @@
-import os
 import json
-from subprocess import run
-
-# This hasn't been properly tested, this mostly resembles what i use in most of my projects
+import os
+import time
+from subprocess import CalledProcessError, run
 
 # I'm way too lazy to add actual xml writing, so just do it the jank way
 
-def merge_chunks(chunk_count: int, work_dir: str, out_path: str, extra_commands: str):
-    video_sources_cmd = f"( {work_dir}/chunks/0.ivf )" # the base chunk
-    append_cmd = f"--append-to "
-
-    for i in range(chunk_count-1):
-        cur_idx = i + 1
-        video_sources_cmd +=  f" + ( {work_dir}/chunks/{cur_idx}.ivf )"
-
-        end_char=","
-        if cur_idx == chunk_count - 1:
-            end_char = ""
-
-        append_cmd += f"{cur_idx}:0:{i}:0{end_char}" 
-
-    # Build command json
-    command_obj = [
-        "--language",
-        " 0:und",
-        *video_sources_cmd.split(),
-        *append_cmd.split(),
-        *extra_commands
-    ]
-
-    # Serialize the command into JSON and write to file
-    with open(f"{work_dir}/merge.json", 'w') as f:
-        json.dump(command_obj, f, indent=4)
-
-    run(f"mkvmerge @{work_dir}/merge.json --output {out_path}", shell=True, check=True)
-
-# This doesn't work yet i believe
 def add_xml_tag(name, value):
-    return f"""    <Simple>
+    return f"""<Simple>
       <Name>{name}</Name>
       <String>{value}</String>
     </Simple>
 """
 
 def set_mux_application(file, application_name):
-    run(['mkvpropedit', file, '--set', f'writing-application={application_name}', '--set', f'muxing-application={application_name}'])
+    run([
+        "mkvpropedit", 
+        file, 
+        "--set", f"writing-application={application_name}", 
+        "--set", f"muxing-application={application_name}"
+    ])
 
 def extract_subs_and_chapters(in_path, out_path):
-    run(['mkvmerge', '--output', out_path, '--no-audio', '--no-video', '(', in_path, ')', '--track-order', '0:4,0:3'])
+    run([
+        "mkvmerge", 
+        "--output", out_path, 
+        "--no-audio", 
+        "--no-video", 
+        "(", in_path, ")"
+    ])
+
+def get_encoded_date():
+    # Get the current time in ISO 8601 format (UTC)
+    return time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime())
 
 def apply_audio_settings(file, encoder, encode_params):
+    """Function to write info about the encoder to file, using standardized tags, mainly used with opusenc"""
+    date = get_encoded_date()
     xml = f"""<?xml version="1.0"?>
 <!-- <!DOCTYPE Tags SYSTEM "matroskatags.dtd"> -->
 <Tags>
   <Tag>
-    <Simple>
-      <Name></Name>
-      <String></String>
-    </Simple>
-  </Tag>
-  <Tag>
     <Targets />
+    <Simple>
+      <Name>DATE_ENCODED</Name>
+      <String>{date}</String>
+    </Simple>
     <Simple>
       <Name>ENCODER</Name>
       <String>{encoder}</String>
@@ -76,21 +60,28 @@ def apply_audio_settings(file, encoder, encode_params):
     with open(xml_file, 'w') as f:
         f.write(xml)
     # Apply the settings using mkvpropedit
-    run(['mkvpropedit', file, '--tags', f'track:a1:{xml_file}'])
+    run([
+        "mkvpropedit", 
+        file, 
+        "--tags", f"track:1:{xml_file}"
+    ])
 
-# This function is mainly used to add the encoder parameters to the AV1 video stream
 def apply_video_settings(file, encoder, encode_params, encoder_name):
+    """Function to write info about the encoder to file, mainly used for AV1"""
+    date = get_encoded_date()
     xml = f"""<?xml version="1.0"?>
 <!-- <!DOCTYPE Tags SYSTEM "matroskatags.dtd"> -->
 <Tags>
   <Tag>
-    <Simple>
-      <Name></Name>
-      <String></String>
-    </Simple>
-  </Tag>
-  <Tag>
     <Targets />
+    <Simple>
+      <Name>DATE_ENCODED</Name>
+      <String>{date}</String>
+    </Simple>
+    <Simple>
+      <Name>ENCODED_BY</Name>
+      <String>{encoder_name}</String>
+    </Simple>
     <Simple>
       <Name>ENCODER</Name>
       <String>{encoder}</String>
@@ -99,6 +90,31 @@ def apply_video_settings(file, encoder, encode_params, encoder_name):
       <Name>ENCODER_SETTINGS</Name>
       <String>{encode_params}</String>
     </Simple>
+  </Tag>
+</Tags>
+"""
+    xml_file = "settings.xml"
+    with open(xml_file, 'w') as f:
+        f.write(xml)
+    # Apply the settings using mkvpropedit
+    run([
+        "mkvpropedit", 
+        file, 
+        "--tags", f"track:1:{xml_file}"
+    ])
+
+def apply_video_info_x265(file, encoder_name):
+    """Function to write the date and name of who encoded the video to the video track"""
+    date = get_encoded_date()
+    xml = f"""<?xml version="1.0"?>
+<!-- <!DOCTYPE Tags SYSTEM "matroskatags.dtd"> -->
+<Tags>
+  <Tag>
+    <Targets />
+    <Simple>
+      <Name>DATE_ENCODED</Name>
+      <String>{date}</String>
+    </Simple>
     <Simple>
       <Name>ENCODED_BY</Name>
       <String>{encoder_name}</String>
@@ -106,18 +122,22 @@ def apply_video_settings(file, encoder, encode_params, encoder_name):
   </Tag>
 </Tags>
 """
-    xml_file = "videosettings.xml"
+    xml_file = "settings.xml"
     with open(xml_file, 'w') as f:
         f.write(xml)
     # Apply the settings using mkvpropedit
-    run(['mkvpropedit', file, '--tags', f'track:v1:{xml_file}'])
+    run([
+        "mkvpropedit", 
+         file, 
+         "--tags", f"track:1:{xml_file}"
+    ])
 
 def genFontCmd(ep_no):
     str = []
     for f in os.listdir(f"fonts/base"):
         ext = f [-3:] # TODO: bound to break with TTC
         str += [
-            "--attachment-name", f"{f}", 
+            "--attachment-name", f, 
             "--attachment-mime-type", f"font/{ext}",
             "--attach-file", f"fonts/base/{f}"
         ]
@@ -126,7 +146,7 @@ def genFontCmd(ep_no):
         for f in os.listdir(epFontDir):
             ext = f [-3:] # TODO: bound to break with TTC
             str += [
-                "--attachment-name", f"{f}", 
+                "--attachment-name", f, 
                 "--attachment-mime-type", f"font/{ext}",
                 "--attach-file", f"{epFontDir}/{f}"
             ]
@@ -138,11 +158,43 @@ def genInputCmd(file_in, track_name="", lang="und", is_default_track="yes"):
         "--language", f"0:{lang}",
         "--track-name", f"0:{track_name}",
         "--default-track-flag", f"0:{is_default_track}",
-        "(", f"{file_in}",")", 
+        "(", file_in, ")", 
     ]
 
 def genChapterCmd(chapter_in, lang="und"):
     return [
-        "--chapter-language", f"{lang}",
-        "--chapters", f"{chapter_in}",
+        "--chapter-language", lang,
+        "--chapters", chapter_in,
     ]
+
+# TODO: untested
+def merge(out_path, video_in, audio_in, subs_in, fonts_in, chapter_in, overwrite_mux_application=False, mux_application_name="sj-auto-muxer-v0.1"):
+    cmd = [
+        *genInputCmd(**video_in),
+        *[genInputCmd(**audio) for audio in audio_in],
+        *[genInputCmd(**sub) for sub in subs_in],
+        *fonts_in,
+        # Chapters
+        *genChapterCmd(chapter_in),
+    ]
+
+    # Serialize the command into JSON and write to file
+    with open("merge.json", 'w') as f:
+        json.dump(cmd, f, indent=4)
+    
+    # Execute the command
+    try:
+        run(["mkvmerge"
+            "@merge.json",
+            "--output",
+            out_path,
+            ],
+            shell=True, 
+            check=True
+        )
+        if overwrite_mux_application:
+            set_mux_application(out_path, mux_application_name) # Maybe just leave this out and let the user decide in the base script
+    except CalledProcessError as e:
+        print(f"Error during merging: {e}")
+    finally:
+        os.remove("merge.json")

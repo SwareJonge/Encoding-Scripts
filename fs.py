@@ -1,5 +1,5 @@
 import os
-from shutil import rmtree
+import shutil
 
 def create_dir(dirname):
     if not os.path.exists(dirname):
@@ -7,8 +7,12 @@ def create_dir(dirname):
 
 def remove_dir(name):
     if os.path.isdir(name):
-        rmtree(name)
+        shutil.rmtree(name)
 
 def remove_file(name):
     if os.path.exists(name):
         os.remove(name)
+
+def move_file(old_path, new_path):
+    if os.path.exists(old_path):
+        shutil.move(old_path, new_path)

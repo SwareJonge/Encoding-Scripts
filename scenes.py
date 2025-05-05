@@ -7,9 +7,6 @@ import pickle
 import os
 import json
 import math
-from subprocess import CalledProcessError, run, Popen, DEVNULL, PIPE
-
-import fs
 
 class ZoneOverride: 
     def __init__(self, encoder, passes, video_params, min_scene_len):
@@ -25,13 +22,12 @@ class ZoneOverride:
     def to_dict(self):
         """Convert the ZoneOverride object to a dictionary."""
         return {
-            'encoder': self.encoder,
-            'passes': self.passes,
-            'video_params': self.video_params,
+            "encoder": self.encoder,
+            "passes": self.passes,
+            "video_params": self.video_params,
             "min_scene_len": self.min_scene_len
         }
     
-
 class KeyFrameData:
     def __init__(self, start_frame, end_frame, zone_overrides : ZoneOverride):
         self.start_frame = start_frame
@@ -45,13 +41,13 @@ class KeyFrameData:
     def to_dict(self):
         """Convert the KeyFrameData object to a dictionary."""
         return {
-            'start_frame': self.start_frame,
-            'end_frame': self.end_frame,
-            'zone_overrides': self.zone_overrides.to_dict() if self.zone_overrides else None
+            "start_frame": self.start_frame,
+            "end_frame": self.end_frame,
+            "zone_overrides": self.zone_overrides.to_dict() if self.zone_overrides else None
         }
 
 # Merging zones parsing with keyframe generation
-def parse_zones(zones_path: str, total_frames: int) -> list[KeyFrameData]:
+def parse_zones(zones_path: str) -> list[KeyFrameData]:
     zones = []
 
     if not os.path.exists(zones_path):
@@ -98,10 +94,10 @@ def get_darkness(video, start, end):
     ref = video[start:end].std.PlaneStats(plane=0)
 
     render = clip_async_render(
-            ref, outfile=None, progress=f'Getting frame props... from {start} to {end}',
+            ref, outfile=None, progress=f"Getting frame props... from {start} to {end}",
             callback=lambda _, f: f.props.copy()
     )
-    props = [prop['PlaneStatsAverage'] for prop in render]
+    props = [prop["PlaneStatsAverage"] for prop in render]
 
     for prop in props:
                 brightness.append(prop)
@@ -125,23 +121,51 @@ def get_scenechages(clip: VideoNode, out_path: str = None) -> list[int]:
     return scenechanges
 
 def add_luma_boost_scene(clip: VideoNode, frames: list[KeyFrameData], override: ZoneOverride, scene_start, scene_end, scene_len, default_encoder_settings: str):
+    if override is not None and override.encoder == "aom":
+        override.passes = 2
+    
     dr = get_darkness(clip, scene_start, scene_end)
     if dr > 30:
         luma_boost = math.ceil(dr * 1.2) # multiply darkness of scene by 1.2, this will be the luma bias
         clamped = min(luma_boost, 100) # clamp value to 100
-        luma_param = f'--frame-luma-bias {clamped}' 
+        luma_param = f"--frame-luma-bias {clamped}"
         if override is None:
             params = f"{default_encoder_settings} {luma_param}"
-            override = ZoneOverride('svt_av1', 1, params.split(' '), 24)
+            override = ZoneOverride("svt_av1", 1, params.split(' '), 24)
+            
         else:
-            if '--frame-luma-bias' not in override.video_params: # let user manually set frame luma bias if desired
-                override.video_params += luma_param.split(' ')
+            if override.encoder == "aom":
+                aom_val = round(clamped / (100/15))
+                luma_param = f"--luma-bias={aom_val}"
+                aomOverride = ZoneOverride(override.encoder, 2, override.video_params, 24)
+                if not any(arg.startswith("--luma-bias") for arg in override.video_params): # let user manually set frame luma bias if desired
+                    aomOverride.video_params += luma_param.split(' ')
+                    return finish_scene(frames, aomOverride, scene_start, scene_end, scene_len)
+            elif "--frame-luma-bias" not in override.video_params: # let user manually set frame luma bias if desired
+                svtOverride = ZoneOverride(override.encoder, override.passes, override.video_params, 24)
+                svtOverride.video_params += luma_param.split(' ')
+                return finish_scene(frames, svtOverride, scene_start, scene_end, scene_len)
+    return finish_scene(frames, override, scene_start, scene_end, scene_len)
+
+def add_luma_boost_scene_aom(clip: VideoNode, frames: list[KeyFrameData], override: ZoneOverride, scene_start, scene_end, scene_len, default_encoder_settings: str):
+    dr = get_darkness(clip, scene_start, scene_end)
+    if dr > 30:
+        luma_boost = math.ceil(dr * 1.2) # multiply darkness of scene by 1.2, this will be the luma bias
+        clamped = min(luma_boost, 100) # clamp value to 100
+        aom_val = round(clamped / (100/15))
+        luma_param = f"--luma-bias={aom_val}"
+        if override is None:
+            params = f"{default_encoder_settings} {luma_param}"
+            override = ZoneOverride("aom", 2, params.split(' '), 24)
+        else:
+            if "--luma-bias" not in override.video_params: # let user manually set frame luma bias if desired
+                override.video_params += luma_param.split()
     return finish_scene(frames, override, scene_start, scene_end, scene_len)
 
 # Keyframe generation with zone handling
-def generate_keyframes(clip: VideoNode, zones_path: str, scenechange_path: str, default_encoder_settings: str) -> list[KeyFrameData]:
+def generate_keyframes_luma_boost_av1(clip: VideoNode, zones_path: str, scenechange_path: str, default_encoder_settings: str) -> list[KeyFrameData]:
     end_frame = clip.num_frames
-    zones = parse_zones(zones_path, end_frame)
+    zones = parse_zones(zones_path)
     zonecount = len(zones) if zones is not None else 0
     scenechanges = get_scenechages(clip, scenechange_path)
 
@@ -193,8 +217,67 @@ def generate_keyframes(clip: VideoNode, zones_path: str, scenechange_path: str, 
     print(f"\nFound {key_no} Scenes with {num_extra_splits} extra splits.")
     return frames
 
-def generate_scenes(src: VideoNode, zones_path: str, scenechange_path: str, out_path: str, encode_settings: str):
-    kfs: list[KeyFrameData] = generate_keyframes(src, zones_path, scenechange_path, encode_settings)
+# Keyframe generation with zone handling
+def generate_keyframes(clip: VideoNode, zones_path: str, scenechange_path: str, default_encoder_settings: str) -> list[KeyFrameData]:
+    end_frame = clip.num_frames
+    zones = parse_zones(zones_path)
+    zonecount = len(zones) if zones is not None else 0
+    scenechanges = get_scenechages(clip, scenechange_path)
+
+    scene_start = 0  # start of the scene
+    key_no = 0
+    zoneIdx = 0    
+    num_extra_splits = 0
+    override: ZoneOverride = None
+    frames = []
+    for i in range(end_frame):  # Iterate over all frames and detect scene changes
+        scene_len = i - scene_start
+        if zoneIdx < zonecount:
+            if zones[zoneIdx].start_frame == i: # always make a split at a zone start
+                if scene_start > 0: # edge case for when you want to zone from frame 0, otherwise it would create a scene from frame 0 to frame 0 which would result in a encoder crash
+                    increments = finish_scene(frames, override, scene_start, i, scene_len)
+                    #frames.append(KeyFrameData(scene_start, i, override)) # finish previous split(should i call finish_scene here instead?)
+                    key_no += increments[0]
+                    num_extra_splits += increments[1]
+                override = zones[zoneIdx].zone_overrides
+                scene_start = i                
+                continue # we don't want the scene change detection to interfere with zone splits
+            if zones[zoneIdx].end_frame == i: # finish zone and reset all flags
+                increments = finish_scene(frames, override, scene_start, i, scene_len)
+                key_no += increments[0]
+                num_extra_splits += increments[1]
+
+                override = None
+                zoneIdx += 1
+                
+                if zoneIdx < zonecount: # Edge case check for when end frame of previous zone is the same as the start frame of the current zone
+                    if zones[zoneIdx].start_frame == i:
+                        override = zones[zoneIdx].zone_overrides
+                scene_start = i
+                continue
+
+        if i in scenechanges:
+            if scene_len > 24: # only split if scene is longer than 24 frames                
+                increments = finish_scene(frames, override, scene_start, i, scene_len)
+                key_no += increments[0]
+                num_extra_splits += increments[1]
+                scene_start = i  # start of the next scene
+
+
+    last_scene_duration = end_frame - scene_start
+    increments = finish_scene(frames, override, scene_start, end_frame, last_scene_duration)
+    key_no += increments[0]
+    num_extra_splits += increments[1]
+
+    print(f"\nFound {key_no} Scenes with {num_extra_splits} extra splits.")
+    return frames
+
+
+def generate_scenes(src: VideoNode, zones_path: str, scenechange_path: str, out_path: str, encode_settings: str, luma_bias=True):
+    if luma_bias:
+        kfs: list[KeyFrameData] = generate_keyframes_luma_boost_av1(src, zones_path, scenechange_path, encode_settings)
+    else:
+        kfs: list[KeyFrameData] = generate_keyframes(src, zones_path, scenechange_path, encode_settings)
     # Convert each KeyFrameData to a dictionary and dump to JSON
     kf_dicts = { "scenes": [kf.to_dict() for kf in kfs], "frames": src.num_frames }
     json_out = json.dumps(kf_dicts)
