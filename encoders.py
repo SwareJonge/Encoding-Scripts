@@ -33,7 +33,7 @@ def aom_get_binary_version():
 
 def svt_get_binary_version():
     res = run([
-            "SvtAv1EncApp", "--version"
+        "SvtAv1EncApp", "--version"
         ], 
         capture_output=True,
         text=True,
@@ -100,19 +100,7 @@ def svt_av1_encode_standalone(in_path: str, out_path: str, encoder_settings, ext
 # Deprecated by av1_encode
 def svt_av1_encode(in_path: str, out_path: str, encoder_settings: str, worker_count: int=0, thread_affinity: int=0, scene_path :str= "", extra_av1an_flags: list[str]=None):
     """Encode a file(can be either a vapoursynth script or a video file) with av1an and SVT-AV1"""
-    run([
-        "av1an",
-        "-i", in_path,
-        "-o", out_path,
-        "--scenes", scene_path, 
-        "-w", str(worker_count),
-        "--set-thread-affinity", str(thread_affinity),
-        "-c", "mkvmerge",
-        "-e", "svt-av1",         
-        "-v", encoder_settings,
-        *extra_av1an_flags
-    ])
-    apply_video_settings(out_path, svt_get_binary_version(), encoder_settings, encoder_name)
+    av1_encode(in_path, out_path, "svt-av1", encoder_settings, worker_count, thread_affinity, scene_path, extra_av1an_flags)
 
 def av1_encode(in_path: str, out_path: str, encoder: str, encoder_settings: str, worker_count: int=0, thread_affinity: int=0, scene_path :str="", extra_av1an_flags: list[str]=None):
     """Encode a file(can be either a vapoursynth script or a video file) with av1an and an AV1 encoder, either aomenc or SVT-AV1(sorry rav1e)"""
@@ -134,7 +122,8 @@ def av1_encode(in_path: str, out_path: str, encoder: str, encoder_settings: str,
 
 def x265_encode(in_path: str, out_path: str, settings: str, scene_path: str, worker_count: int=0, thread_affinity: int=0, extra_av1an_flags: list[str]=None):
     """Encode a file(can be either a vapoursynth script or a video file) with av1an and x265"""
-    run(["av1an",
+    run([
+        "av1an",
         "-i", in_path,
         "-o", out_path,
         "--scenes", scene_path,
