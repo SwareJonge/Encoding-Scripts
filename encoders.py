@@ -132,20 +132,20 @@ def av1_encode(in_path: str, out_path: str, encoder: str, encoder_settings: str,
     ])
     apply_video_settings(out_path, ver, encoder_settings, encoder_name)
 
-def x265_encode(in_path: str, out_path: str, settings: str, scene_path: str, worker_count: int=0, extra_av1an_flags: list[str]=None):
+def x265_encode(in_path: str, out_path: str, settings: str, scene_path: str, worker_count: int=0, thread_affinity: int=0, extra_av1an_flags: list[str]=None):
     """Encode a file(can be either a vapoursynth script or a video file) with av1an and x265"""
     run(["av1an",
         "-i", in_path,
         "-o", out_path,
         "--scenes", scene_path,
         "-w", str(worker_count), 
-        "--set-thread-affinity", "2",
+        "--set-thread-affinity", str(thread_affinity),
         "-c", "mkvmerge",
         "-e", "x265",
         "-v", settings,
         *extra_av1an_flags
     ])
-    apply_video_info_x265(out_path, "SwareJonge")
+    apply_video_info_x265(out_path, encoder_name)
 
 # example usage
 def luma_boost_encode(in_path: str, out_path: str, zones_path : str, scene_path: str, encoder_settings: str):
