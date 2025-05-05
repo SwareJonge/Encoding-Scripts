@@ -111,7 +111,7 @@ def get_darkness(video, start, end):
 def get_scenechages(clip: VideoNode, out_path: str = None) -> list[int]:
     conifg_path = f"{out_path}"
     if not os.path.exists(conifg_path):
-        scenechanges = Keyframes.from_clip(clip, 1)
+        scenechanges = Keyframes.from_clip(clip, 0)
         with open(conifg_path, "wb") as f:
             pickle.dump(scenechanges, f)
     
