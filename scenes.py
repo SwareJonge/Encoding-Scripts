@@ -177,16 +177,14 @@ def generate_keyframes_luma_boost_av1(clip: VideoNode, zones_path: str, scenecha
     frames = []
     for i in range(end_frame):  # Iterate over all frames and detect scene changes
         scene_len = i - scene_start
-        if zoneIdx < zonecount:
+        if zoneIdx < zonecount: # zones take priority over normal scenechanges, however splits are still made if a scenechange is found in that zone
             if zones[zoneIdx].start_frame == i: # always make a split at a zone start
-                if scene_start > 0: # edge case for when you want to zone from frame 0, otherwise it would create a scene from frame 0 to frame 0 which would result in a encoder crash
-                    increments = add_luma_boost_scene(clip, frames, override, scene_start, i, scene_len, default_encoder_settings)
-                    #frames.append(KeyFrameData(scene_start, i, override)) # finish previous split(should i call finish_scene here instead?)
-                    key_no += increments[0]
-                    num_extra_splits += increments[1]
+                increments = add_luma_boost_scene(clip, frames, override, scene_start, i, scene_len, default_encoder_settings)
+                key_no += increments[0]
+                num_extra_splits += increments[1]
                 override = zones[zoneIdx].zone_overrides
                 scene_start = i                
-                continue # we don't want the scene change detection to interfere with zone splits
+                continue
             if zones[zoneIdx].end_frame == i: # finish zone and reset all flags
                 increments = add_luma_boost_scene(clip, frames, override, scene_start, i, scene_len, default_encoder_settings)
                 key_no += increments[0]
@@ -232,16 +230,14 @@ def generate_keyframes(clip: VideoNode, zones_path: str, scenechange_path: str, 
     frames = []
     for i in range(end_frame):  # Iterate over all frames and detect scene changes
         scene_len = i - scene_start
-        if zoneIdx < zonecount:
+        if zoneIdx < zonecount: # zones take priority over normal scenechanges, however splits are still made if a scenechange is found in that zone
             if zones[zoneIdx].start_frame == i: # always make a split at a zone start
-                if scene_start > 0: # edge case for when you want to zone from frame 0, otherwise it would create a scene from frame 0 to frame 0 which would result in a encoder crash
-                    increments = finish_scene(frames, override, scene_start, i, scene_len)
-                    #frames.append(KeyFrameData(scene_start, i, override)) # finish previous split(should i call finish_scene here instead?)
-                    key_no += increments[0]
-                    num_extra_splits += increments[1]
+                increments = finish_scene(frames, override, scene_start, i, scene_len)
+                key_no += increments[0]
+                num_extra_splits += increments[1]
                 override = zones[zoneIdx].zone_overrides
                 scene_start = i                
-                continue # we don't want the scene change detection to interfere with zone splits
+                continue
             if zones[zoneIdx].end_frame == i: # finish zone and reset all flags
                 increments = finish_scene(frames, override, scene_start, i, scene_len)
                 key_no += increments[0]
