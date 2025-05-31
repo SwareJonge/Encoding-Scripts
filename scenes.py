@@ -179,9 +179,10 @@ def generate_keyframes_luma_boost_av1(clip: VideoNode, zones_path: str, scenecha
         scene_len = i - scene_start
         if zoneIdx < zonecount: # zones take priority over normal scenechanges, however splits are still made if a scenechange is found in that zone
             if zones[zoneIdx].start_frame == i: # always make a split at a zone start
-                increments = add_luma_boost_scene(clip, frames, override, scene_start, i, scene_len, default_encoder_settings)
-                key_no += increments[0]
-                num_extra_splits += increments[1]
+                if i != 0: # if it's a zone that starts on frame 0, don't finish the split(since that's not possible)
+                    increments = add_luma_boost_scene(clip, frames, override, scene_start, i, scene_len, default_encoder_settings)
+                    key_no += increments[0]
+                    num_extra_splits += increments[1]
                 override = zones[zoneIdx].zone_overrides
                 scene_start = i                
                 continue
@@ -232,9 +233,10 @@ def generate_keyframes(clip: VideoNode, zones_path: str, scenechange_path: str, 
         scene_len = i - scene_start
         if zoneIdx < zonecount: # zones take priority over normal scenechanges, however splits are still made if a scenechange is found in that zone
             if zones[zoneIdx].start_frame == i: # always make a split at a zone start
-                increments = finish_scene(frames, override, scene_start, i, scene_len)
-                key_no += increments[0]
-                num_extra_splits += increments[1]
+                if i != 0: # if it's a zone that starts on frame 0, don't finish the split(since that's not possible)
+                    increments = finish_scene(frames, override, scene_start, i, scene_len)
+                    key_no += increments[0]
+                    num_extra_splits += increments[1]
                 override = zones[zoneIdx].zone_overrides
                 scene_start = i                
                 continue
