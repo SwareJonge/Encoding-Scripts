@@ -8,7 +8,7 @@ import encoders
 import fs
 import ivftools
 import mux
-from scenes import KeyFrameData, ZoneOverride, kf_to_json, generate_scenes, scene_minimum_boost
+from scenes import KeyFrameData, ZoneOverride, kf_to_json, generate_scenes, minimum_boost
 
 def get_size_str(size):
     if size < 1024:
@@ -43,6 +43,11 @@ def find_optimal_levels(src_path, script_path, scene_out_path, scenechange_path,
     fs.create_dir(f"autoboost")
     fs.create_dir(f"lumaboost")
     scenes = generate_scenes(src, "", scenechange_path, f"test/scenes.json", "", False, False)
+    keyframes_str = f"ForceKeyFrames : {'f,'.join([str(scene.start_frame) for scene in scenes])}f"
+    keyframe_path = "./keyframes.cfg"
+    with open(keyframe_path, "w", encoding="utf-8") as f:
+        f.write(keyframes_str)
+
     num_scenes = len(scenes)
     # Generate the custom scenes
     if luma_bias:
@@ -51,8 +56,11 @@ def find_optimal_levels(src_path, script_path, scene_out_path, scenechange_path,
         if not os.path.exists(luma_boost_out_path):
             modded_scenes = generate_scenes(src, "", scenechange_path, luma_boost_out_path, f"--preset {fast_preset} --lp 2 --crf {base_crf} {enc_params} {color_info}", luma_bias=luma_bias)
         else:
+            modded_scenes = []
             scenes_dict = json.load(open(luma_boost_out_path, "r", encoding="utf-8"))["scenes"]
-            modded_scenes = [ KeyFrameData(**cur_modded_scene) for cur_modded_scene in scenes_dict ]
+            for cur_modded_scene in scenes_dict:
+                cur_scene = KeyFrameData(**cur_modded_scene)
+                modded_scenes.append(cur_scene)
     else:
         modded_scenes = scenes
 
@@ -61,56 +69,69 @@ def find_optimal_levels(src_path, script_path, scene_out_path, scenechange_path,
         autoboost_scene_path = f"autoboost/{minimum_boost_out_name}.json"
         if not os.path.exists(autoboost_scene_path):
             print(minimum_boost_params)
-            
-            with open(f"autoboost/{minimum_boost_out_name}.log", "w+") as f:
-                for i, modded_scene in enumerate(modded_scenes):                    
-                    scene_minimum_boost(src[modded_scene.start_frame:modded_scene.end_frame], modded_scenes[i], minimum_boost_params["best_crf"], minimum_boost_params["worst_crf"], minimum_boost_params["crf_step"], minimum_boost_params["min_ssimu2_score"], minimum_boost_params["bitrate_cap"], enc_params, fast_preset, color_info, f)
+            fs.create_dir(r"C:/temp")
+            minimum_boost(src, modded_scenes, f"autoboost/{minimum_boost_out_name}.log", minimum_boost_params, base_crf, fast_preset, enc_params, keyframe_path, color_info)
             kf_to_json(modded_scenes, autoboost_scene_path, src.num_frames)
-
+            try:
+                fs.remove_dir(r"C:/temp")
+            except:
+                print("Failed to remove temp dir")
         else:
             scenes_dict = json.load(open(autoboost_scene_path, "r", encoding="utf-8"))["scenes"]
             modded_scenes = [ KeyFrameData(**cur_modded_scene) for cur_modded_scene in scenes_dict]
             print(f"Loaded autoboost scenes")
-            #print(modded_scenes)
 
-    for h in range(min_hierarch, 6):
-        video_path = f"test/{h}.mkv"
+    ivf_files = []
+    for h in range(min_hierarch, 6): # 2 generally isn't worth it
+        video_path = f"test/{h}.ivf"
         if not os.path.exists(video_path):
-            fast_pass_settings = f"--preset {fast_preset} --lp 2 --crf {base_crf} {enc_params} --hierarchical-levels {h} {color_info}"
+            fast_pass_settings = f"--config {keyframe_path} --preset {fast_preset} --crf {base_crf} {enc_params} --hierarchical-levels {h} {color_info}"
             scene_path = f"test/scenes_h{h}.json"
             if not os.path.exists(scene_path):
                 for i, modded_scene in enumerate(modded_scenes):
                     if modded_scene.zone_overrides is not None:
                         modded_scenes[i].zone_overrides.update_video_params("--hierarchical-levels", h)
                 kf_to_json(modded_scenes, scene_path, src.num_frames)
-            encoders.svt_av1_encode(script_path, video_path, fast_pass_settings, 15, 2, scene_path, ["--keep", "--temp", f"test/hierarch/{h}"])
+
+            with subprocess.Popen([
+                "SvtAv1EncApp",
+                "-i", "-",
+                "-b", video_path,
+                "--progress", "3",
+                *fast_pass_settings.split(" ")
+            ], stdin=subprocess.PIPE) as process: 
+                src.output(process.stdin, y4m=True)
+                process.communicate()
+        ivf_files += [ivftools.IVFFile(video_path)]
+
+    hierarch_counter = Counter()
+    estimated_out_size = 0
+    concat_list = []
+
+    kfs = []
 
     processed_scenes = [
         json.load(open(f"test/scenes_h{h}.json", "r", encoding="utf-8"))["scenes"] for h in range(min_hierarch, 6)
     ]
 
-    hierarch_counter = Counter()
-    estimated_out_size = 0
-    concat_list = []
-    kfs = []
     best_hierarchs = []
-    for sceneNo in range(num_scenes):
+    for scene in scenes:
         lowest_size = 0
         best_hierarch = 5
         wrote_hierarch = False
         
         for h in range(min_hierarch, 6):
-            ivf_path = f"./test/hierarch/{h}/encode/{sceneNo:00005}.ivf"
-            test_section_size = os.path.getsize(ivf_path)
-            if lowest_size == 0 or test_section_size < lowest_size:
-                lowest_size = test_section_size
+            #section_size = ivftools.get_section_size(ivf_files[h-min_hierarch], scene.start_frame, scene.end_frame)
+            section_size = ivf_files[h-min_hierarch].get_section_size(scene.start_frame, scene.end_frame)
+            
+            if lowest_size == 0 or section_size < lowest_size:
+                lowest_size = section_size
                 best_hierarch = h
                 wrote_hierarch = True
 
         if not wrote_hierarch:
-            print(f"ERROR scene {sceneNo}") # This should never happen
-        
-        estimated_out_size += lowest_size
+            print(f"ERROR loop 1 scene {sceneNo}")
+        estimated_out_size += lowest_size + 12 # add lowest size + size of IVF Frame Header
         hierarch_counter[best_hierarch] += 1
         best_hierarchs += [best_hierarch]
         
@@ -134,7 +155,7 @@ def find_optimal_levels(src_path, script_path, scene_out_path, scenechange_path,
 
     kf_to_json(kfs, scene_out_path, src.num_frames)    
 
-    print(f"Fast Pass output size: {get_size_str(estimated_out_size)}")
+    print(f"Fast Pass output size: {get_size_str(estimated_out_size + 32)}") # also add the IVF Header
 
     if use_fast_video:
         merge_path = f"test/optimized.ivf"
@@ -146,6 +167,4 @@ def find_optimal_levels(src_path, script_path, scene_out_path, scenechange_path,
             "(", merge_path, ")"
         ])
         mux.apply_video_settings(video_out_path, encoders.svt_get_binary_version(), f"--preset {preset} --lp 2 {enc_params} --hierarchical-levels {best_hierarch} {color_info}--preset {preset} --lp 2 {enc_params} --hierarchical-levels {most_common_hierarch} {color_info}", "SwareJonge")
-
-    fs.remove_dir("test/")
     return default_enc_params

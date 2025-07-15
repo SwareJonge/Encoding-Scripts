@@ -1,7 +1,68 @@
 import struct
 import os
 
-# TODO: Rewrite
+# TODO: rewrite writing code
+
+class IVFHeader:
+    def __init__(self, stream):
+        (
+            self.signature,
+            self.version,
+            self.header_size,
+            self.fourcc,
+            self.width,
+            self.height,
+            self.fps_num,
+            self.fps_den,
+            self.frame_count,
+            self.reserved
+        ) = struct.unpack('<4sHH4sHHIII4s', stream.read(32))
+
+class IVFFrameHeader:
+    def __init__(self, stream):
+        (self.size, self.timestamp) = struct.unpack('<IQ', stream.read(12))
+
+class IVFFile(IVFHeader):
+    def __init__(self, file):
+        stream = open(file, "rb") if isinstance(file, str) else file
+        super().__init__(stream)
+        #self._read_header()
+        self.frame_offset = []
+        self.frame_headers = [] 
+        offset = 32
+        for _ in range(self.frame_count):
+            stream.seek(offset)
+            frame_header = IVFFrameHeader(stream)
+            self.frame_headers.append(frame_header)
+            offset += 12 + frame_header.size
+
+    def get_section_size(self, start_frame=0, end_frame=0):
+        if end_frame == 0:
+            end_frame = self.frame_count
+
+        num_frames = end_frame - start_frame
+        if num_frames == 0:
+            return 0
+        
+        section_size = 0
+        for frame_header in self.frame_headers[start_frame:end_frame]:
+            section_size += frame_header.size
+        return section_size
+
+    def get_frame_size(self):
+        section_size = 0
+        for frame_header in self.frame_headers:
+            section_size += frame_header.size
+        return section_size
+
+    def get_section_bitrate(self, start_frame=0, end_frame=0):
+        num_frames = end_frame - start_frame
+        if num_frames == 0:
+            return 0
+        return self.get_section_size(start_frame, end_frame) * 8 * (self.fps_num / self.fps_den) / num_frames / 1000
+
+    def get_bitrate(self):
+        return self.get_frame_size() * 8 * (self.fps_num / self.fps_den) / self.frame_count / 1000
 
 def read_from_offset(file_path, offset, size):
     with open(file_path, 'rb') as file:
@@ -27,10 +88,6 @@ def write_ivf_header(file, width, height, fps_num, fps_den, frame_count=0):
     )
     file.write(header)
 
-def read_ivf_header(file):
-    header_data = file.read(32)
-    return struct.unpack('<4sHH4sHHIII4s', header_data)
-
 def rewrite_frame_header(file, size, timestamp):
     frame_header = struct.pack(
         '<IQ',
@@ -38,7 +95,6 @@ def rewrite_frame_header(file, size, timestamp):
         timestamp # 0x04
     )
     file.write(frame_header)
-
 
 def has_all_frames(ivf_path):
     num_frames = int.from_bytes(read_from_offset(ivf_path, 24, 4), 'little')
@@ -53,47 +109,6 @@ def has_all_frames(ivf_path):
             return False
     
     return True
-
-def get_section_size(ivf_in_path, num_frames):
-    section_size = 0
-    offset = 32 # Frame data start
-    with open(ivf_in_path, "rb") as f:
-        for _ in range(num_frames):
-            f.seek(offset)                                # Jump to header
-            size = int.from_bytes(f.read(4), 'little')    # Get size of frame data
-            offset += 12 + size                           # Size of frame + size of frame header
-            section_size += size
-    return section_size
-
-def get_bitrate(ivf_in_path, num_frames=0):
-    """
-    Gets the bitrate of a section
-    """
-    section_size = 0
-    f = open(ivf_in_path, "rb")
-    (
-        signature,
-        version,
-        header_size,
-        fourcc,
-        width,
-        height,
-        fps_num,
-        fps_den,
-        frame_count,
-        reserved
-    ) = read_ivf_header(f)
-    if num_frames == 0:
-        num_frames = frame_count
-
-    offset = 32 # Frame data start
-    for _ in range(num_frames):
-        f.seek(offset)                                # Jump to header
-        size = int.from_bytes(f.read(4), 'little')    # Get size of frame data
-        offset += 12 + size                           # Size of frame + size of frame header
-        section_size += size
-    f.close()
-    return section_size * 8 * (fps_num / fps_den) / num_frames / 1000
 
 def split_ivf(ivf_path, keyframes, out_dir):
     # TODO: not tested

@@ -1,12 +1,14 @@
 from vapoursynth import core, VideoNode
 from vstools import  Keyframes, clip_async_render
-import math
-import statistics
-import pickle
-import os
 import json
 import math
+import pickle
+import os
+import numpy
+import math
+import statistics
 import subprocess
+import tqdm
 
 import ivftools
 
@@ -66,13 +68,12 @@ class KeyFrameData:
             "zone_overrides": self.zone_overrides.to_dict() if self.zone_overrides else None
         }
 
+# TODO: rewrite this and put it in a class
 def scene_minimum_boost(src: VideoNode, scene_out: KeyFrameData, best_crf, worst_crf, crf_step, min_score, bitrate_cap, enc_params, fast_preset, color_info, f):
     """
     Increases CRF for a scene
     Currently SVT-AV1 only
     """
-    MAX_BITRATE = bitrate_cap + (bitrate_cap / 10)
-
     params = f"--preset {fast_preset} --lp 6 --crf {worst_crf} {enc_params} {color_info}"
     for crf in range(worst_crf, best_crf - 1, -crf_step):
         params = f"--preset {fast_preset} --lp 6 --crf {crf} {enc_params} {color_info}"
@@ -83,34 +84,31 @@ def scene_minimum_boost(src: VideoNode, scene_out: KeyFrameData, best_crf, worst
             "SvtAv1EncApp",
             "-i", "-",
             "-b", out_name,
+            "--progress", "3",
+            "--keyint", "-1",
             "--hierarchical-levels", "5", # This speeds up the encoding as well
             *params.split(" ")
         ], stdin=subprocess.PIPE) as process: 
             src.output(process.stdin, y4m=True)
             process.communicate()
         
-            section_bitrate = ivftools.get_bitrate(out_name, src.num_frames)
+            section_bitrate = ivftools.IVFFile(out_name).get_bitrate()
             frames = src.vszip.SSIMULACRA2(core.bs.VideoSource(out_name)).frames()
-            has_bad_frame = False
-            print("Computing Score")
-            for frame_no, frame in enumerate(frames):
-                cur_frame_score = frame.props['SSIMULACRA2']
-                avg_score += cur_frame_score
-                if cur_frame_score < min_score:
-                    f.write(f"Scored bad on frame {scene_out.start_frame+frame_no} ({cur_frame_score:.2f})\n")
-                    has_bad_frame = True
-                if cur_frame_score < scene_lowest_score:
-                    scene_lowest_score = cur_frame_score
-            avg_score = avg_score / src.num_frames
-            print(f"Avg Score: {avg_score} Worst: {scene_lowest_score}")
-            if not has_bad_frame:
+            
+            score_array = numpy.array([frame.props['SSIMULACRA2'] for frame in frames])
+
+            scene_lowest_score = numpy.min(score_array)
+            avg_score = numpy.mean(score_array)
+
+            print(f"Avg Score: {avg_score:.2f} Worst: {scene_lowest_score:.2f}")
+
+            if numpy.all(score_array >= min_score):
                 print("No bad frames")
-                f.write("This scene is fine\n")
                 break
             
-            if section_bitrate > MAX_BITRATE:
+            if section_bitrate > bitrate_cap:
                 print("Bitrate cap hit")
-                f.write(f"Bitrate cap hit\n")
+                #f.write(f"Bitrate cap hit\n")
                 break
     
     if worst_crf != crf:
@@ -119,6 +117,48 @@ def scene_minimum_boost(src: VideoNode, scene_out: KeyFrameData, best_crf, worst
             scene_out.zone_overrides.replace_video_param("--crf", crf)
         else:
             scene_out.zone_overrides = ZoneOverride("svt_av1", 1, params, 24)
+    
+def minimum_boost(src: VideoNode, scenes: list[KeyFrameData], log_path: str, minimum_boost_params, base_crf, fast_preset, enc_params, keyframe_file, color_info):
+    """
+    Boost CRF of a scene and save the results in the KeyFrameData list
+    SVT-AV1 only(wouldn't be the case if i were smarter)
+    """
+    WORST_CRF = minimum_boost_params["worst_crf"]
+    MIN_SCORE_THRES = minimum_boost_params["min_ssimu2_score"]
+    BITRATE_CAP = minimum_boost_params["bitrate_cap"]
+    MAX_BITRATE = BITRATE_CAP + (BITRATE_CAP / 10)
+    params = f"--preset {fast_preset} --lp 6 --crf {base_crf} {enc_params} {color_info}"
+    print(params)
+    if not os.path.exists("autoboost/fastpass.ivf"):
+        with subprocess.Popen([
+            "SvtAv1EncApp",
+            "-i", "-",
+            "-b", "autoboost/fastpass.ivf",
+            "--progress", "3",
+            "--config", keyframe_file,
+            *params.split(" ")
+        ], stdin=subprocess.PIPE) as process: 
+            src.output(process.stdin, y4m=True)
+            process.communicate()
+
+    enc_ivf = ivftools.IVFFile("autoboost/fastpass.ivf")
+    enc_src = core.bs.VideoSource("autoboost/fastpass.ivf")
+    print("Computing SSIMU2 of fast pass encode")
+    enc_frames = src.vszip.SSIMULACRA2(enc_src).frames()
+    
+    score_list = numpy.array([f.props['SSIMULACRA2'] for f in tqdm(enc_frames)])
+
+    print("Computed SSIMU2 of fast pass encode")
+    with open(log_path, "w+") as f:
+        for i, modded_scene in enumerate(scenes):
+            if enc_ivf.get_section_bitrate(modded_scene.start_frame, modded_scene.end_frame) > MAX_BITRATE:
+                continue
+            
+            scene_scores = score_list[modded_scene.start_frame:modded_scene.end_frame]
+            if numpy.any(scene_scores < MIN_SCORE_THRES):
+                print(f"Boosting scene {modded_scene.start_frame}_{modded_scene.end_frame}")
+                scene_minimum_boost(src[modded_scene.start_frame:modded_scene.end_frame], scenes[i], minimum_boost_params["best_crf"], WORST_CRF - 1, minimum_boost_params["crf_step"], MIN_SCORE_THRES, MAX_BITRATE, enc_params, fast_preset, color_info, f)
+                
 
 # Merging zones parsing with keyframe generation
 def parse_zones(zones_path: str) -> list[KeyFrameData]:
